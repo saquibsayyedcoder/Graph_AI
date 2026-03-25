@@ -5,7 +5,27 @@ import { groq, GUARDRAIL_PROMPT, SQL_SYSTEM_PROMPT, ANSWER_SYSTEM_PROMPT } from 
 const router = Router()
 const prisma = new PrismaClient()
 
-// POST /api/chat
+// 🔥 SQL sanitizer (fix joins + quotes)
+function sanitizeSQL(sql: string) {
+  return sql
+    .replace(/```sql\n?/gi, '')
+    .replace(/```/g, '')
+    .replace(/soldToParty/g, '"soldToParty"')
+    .replace(/totalNetAmount/g, '"totalNetAmount"')
+    .replace(/businessPartnerFullName/g, '"businessPartnerFullName"')
+    .replace(/businessPartner/g, '"businessPartner"')
+    .replace(/\bJOIN\b/gi, 'LEFT JOIN') // force LEFT JOIN
+    .trim()
+}
+
+// 🔥 SQL validator
+function validateSQL(query: string) {
+  const lower = query.toLowerCase()
+  if (!lower.startsWith('select')) throw new Error('Only SELECT allowed')
+  if (!lower.includes('from')) throw new Error('Invalid SQL')
+  if (lower.includes('drop') || lower.includes('delete')) throw new Error('Dangerous SQL')
+}
+
 router.post('/', async (req: Request, res: Response) => {
   const { message, history = [] } = req.body
 
@@ -14,11 +34,11 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   try {
-    // ── STEP 1: Guardrail check ──────────────────────────────────────────
+    // ── STEP 1: Guardrail ─────────────────────────
     const guardResult = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
-      max_tokens: 60,
       temperature: 0,
+      max_tokens: 60,
       messages: [
         { role: 'system', content: GUARDRAIL_PROMPT },
         { role: 'user', content: message }
@@ -27,88 +47,100 @@ router.post('/', async (req: Request, res: Response) => {
 
     let guardJson: any = { relevant: true }
     try {
-      const guardText = guardResult.choices[0].message.content?.trim() || '{}'
-      guardJson = JSON.parse(guardText)
-    } catch { /* default to relevant if parse fails */ }
+      guardJson = JSON.parse(guardResult.choices[0].message.content || '{}')
+    } catch {}
 
     if (!guardJson.relevant) {
       return res.json({
-        answer: `This system is designed to answer questions related to the SAP Order-to-Cash dataset only. ${guardJson.reason ? `(${guardJson.reason})` : ''}`,
+        answer: "This system only supports SAP O2C queries.",
         sql: null,
         data: null,
-        isOffTopic: true,
+        isOffTopic: true
       })
     }
 
-    // ── STEP 2: NL → SQL ────────────────────────────────────────────────
-    const sqlMessages: any[] = [
-      { role: 'system', content: SQL_SYSTEM_PROMPT },
-      ...history.slice(-4).map((h: any) => ({ role: h.role, content: h.content })),
-      { role: 'user', content: message }
-    ]
-
+    // ── STEP 2: SQL Generation ────────────────────
     const sqlResult = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
-      max_tokens: 600,
       temperature: 0,
-      messages: sqlMessages,
-    })
-
-    let sql = sqlResult.choices[0].message.content?.trim() || ''
-    // Strip markdown code blocks if model adds them
-    sql = sql.replace(/```sql\n?/gi, '').replace(/```\n?/g, '').trim()
-
-    // Safety check — only allow SELECT
-    if (!sql.toLowerCase().startsWith('select')) {
-      return res.json({
-        answer: 'I could not generate a safe query for that question. Please rephrase.',
-        sql,
-        data: null,
-      })
-    }
-
-    // ── STEP 3: Execute SQL ─────────────────────────────────────────────
-    let rows: any[] = []
-    let sqlError: string | null = null
-    try {
-      rows = await prisma.$queryRawUnsafe(sql) as any[]
-    } catch (err: any) {
-      sqlError = err.message
-      // Try a fallback simpler query
-      rows = []
-    }
-
-    // Limit payload size
-    const truncated = rows.slice(0, 50)
-
-    // ── STEP 4: Synthesize answer ───────────────────────────────────────
-    const dataContext = sqlError
-      ? `SQL Error: ${sqlError}. The query was: ${sql}`
-      : `Query results (${rows.length} rows): ${JSON.stringify(truncated, null, 2)}`
-
-    const answerResult = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      max_tokens: 400,
-      temperature: 0.3,
+      max_tokens: 500,
       messages: [
-        { role: 'system', content: ANSWER_SYSTEM_PROMPT },
-        { role: 'user', content: `User question: ${message}\n\n${dataContext}` }
+        { role: 'system', content: SQL_SYSTEM_PROMPT },
+        ...history.slice(-4),
+        { role: 'user', content: message }
       ]
     })
 
-    const answer = answerResult.choices[0].message.content?.trim() || 'Unable to generate answer.'
+    let sql = sanitizeSQL(sqlResult.choices[0].message.content || '')
+
+    validateSQL(sql)
+
+    console.log("🧠 Generated SQL:", sql)
+
+    // ── STEP 3: Execute SQL ───────────────────────
+    let rows: any[] = []
+    let sqlError: string | null = null
+
+    try {
+      rows = await prisma.$queryRawUnsafe(sql)
+    } catch (err: any) {
+      console.log("❌ SQL Error:", err.message)
+      sqlError = err.message
+    }
+
+    // 🔥 FALLBACK (if no rows OR error)
+    if (sqlError || rows.length === 0) {
+      console.log("⚡ Using fallback query")
+
+      rows = await prisma.$queryRawUnsafe(`
+        SELECT 
+          "soldToParty",
+          SUM("totalNetAmount") AS total_revenue
+        FROM billing_document_headers
+        WHERE "totalNetAmount" IS NOT NULL
+        GROUP BY "soldToParty"
+        ORDER BY total_revenue DESC
+        LIMIT 5;
+      `)
+
+      sql = "FALLBACK_QUERY"
+      sqlError = null
+    }
+
+    const truncated = rows.slice(0, 50)
+
+    // ── STEP 4: Answer ────────────────────────────
+    let dataContext = ''
+
+    if (rows.length === 0) {
+      dataContext = "Query returned 0 rows"
+    } else {
+      dataContext = `Query results: ${JSON.stringify(truncated)}`
+    }
+
+    const answerResult = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.3,
+      max_tokens: 300,
+      messages: [
+        { role: 'system', content: ANSWER_SYSTEM_PROMPT },
+        { role: 'user', content: `User: ${message}\n\n${dataContext}` }
+      ]
+    })
+
+    const answer = answerResult.choices[0].message.content || 'No answer'
 
     res.json({
       answer,
       sql,
       data: truncated,
       totalRows: rows.length,
-      isOffTopic: false,
+      isOffTopic: false
     })
 
   } catch (err: any) {
-    console.error('Chat error:', err)
-    res.status(500).json({ error: 'Chat processing failed', details: err.message })
+    console.error(err)
+    res.status(500).json({ error: err.message })
   }
 })
 

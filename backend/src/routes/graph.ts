@@ -4,8 +4,11 @@ import { PrismaClient } from '@prisma/client'
 const router = Router()
 const prisma = new PrismaClient()
 
-// GET /api/graph - returns full graph (paginated/sampled for performance)
-router.get('/', async (req: Request, res: Response) => {
+function safeAmount(val: any) {
+  return Number(val || 0).toLocaleString()
+}
+
+router.get('/', async (_req: Request, res: Response) => {
   try {
     const [
       salesOrders,
@@ -15,6 +18,7 @@ router.get('/', async (req: Request, res: Response) => {
       payments,
       journalEntries,
       partners,
+      bdItems
     ] = await Promise.all([
       prisma.salesOrderHeader.findMany({ take: 100, include: { items: true } }),
       prisma.outboundDeliveryHeader.findMany({ take: 100, include: { items: true } }),
@@ -23,6 +27,7 @@ router.get('/', async (req: Request, res: Response) => {
       prisma.paymentAccountsReceivable.findMany({ take: 100 }),
       prisma.journalEntryItem.findMany({ take: 100 }),
       prisma.businessPartner.findMany({ include: { addresses: true } }),
+      prisma.billingDocumentItem.findMany({ take: 300 })
     ])
 
     const nodes: any[] = []
@@ -33,11 +38,15 @@ router.get('/', async (req: Request, res: Response) => {
       const key = `${source}__${target}`
       if (!edgeSet.has(key) && source !== target) {
         edgeSet.add(key)
-        edges.push({ id: key, source, target, label, animated: false })
+        edges.push({ id: key, source, target, label })
       }
     }
 
-    // Business Partner nodes
+    // 🔥 Create fast lookup maps
+    const deliveryMap = new Set(deliveries.map(d => d.deliveryDocument))
+    const billingMap = new Map(billingDocs.map(b => [b.accountingDocument, b]))
+
+    // ── Business Partners ──
     for (const bp of partners) {
       nodes.push({
         id: `bp_${bp.businessPartner}`,
@@ -49,187 +58,189 @@ router.get('/', async (req: Request, res: Response) => {
           city: bp.addresses[0]?.cityName || '',
           country: bp.addresses[0]?.country || '',
         },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: 0 }
       })
     }
 
-    // Sales Order nodes + edges to customer
+    // ── Sales Orders ──
     for (const so of salesOrders) {
       nodes.push({
         id: `so_${so.salesOrder}`,
         type: 'salesOrder',
         data: {
           label: `SO ${so.salesOrder}`,
-          subLabel: `₹${Number(so.totalNetAmount || 0).toLocaleString()}`,
+          subLabel: `₹${safeAmount(so.totalNetAmount)}`,
           status: so.overallDeliveryStatus,
           billingStatus: so.overallOrdReltdBillgStatus,
-          currency: so.transactionCurrency,
-          itemCount: so.items.length,
-          creationDate: so.creationDate,
+          itemCount: so.items.length
         },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: 0 }
       })
+
       if (so.soldToParty) {
         addEdge(`bp_${so.soldToParty}`, `so_${so.salesOrder}`, 'places')
       }
     }
 
-    // Delivery nodes + edges from sales order items
+    // ── Deliveries ──
     for (const del of deliveries) {
       nodes.push({
         id: `del_${del.deliveryDocument}`,
         type: 'delivery',
         data: {
           label: `Delivery ${del.deliveryDocument}`,
-          subLabel: del.shippingPoint ? `Ship: ${del.shippingPoint}` : '',
-          goodsMovementStatus: del.overallGoodsMovementStatus,
-          pickingStatus: del.overallPickingStatus,
-          creationDate: del.creationDate,
+          subLabel: del.shippingPoint || '',
+          status: del.overallGoodsMovementStatus
         },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: 0 }
       })
     }
 
-    // Link delivery items → sales orders
+    // SO → Delivery
     for (const di of deliveryItems) {
       if (di.referenceSdDocument) {
         addEdge(`so_${di.referenceSdDocument}`, `del_${di.deliveryDocument}`, 'fulfilled by')
       }
     }
 
-    // Billing Document nodes + edges from deliveries and sales orders
+    // ── Billing Documents ──
     for (const bd of billingDocs) {
       nodes.push({
         id: `bd_${bd.billingDocument}`,
         type: 'billingDocument',
         data: {
           label: `Invoice ${bd.billingDocument}`,
-          subLabel: `₹${Number(bd.totalNetAmount || 0).toLocaleString()}`,
-          isCancelled: bd.billingDocumentIsCancelled,
-          fiscalYear: bd.fiscalYear,
-          accountingDocument: bd.accountingDocument,
-          creationDate: bd.creationDate,
+          subLabel: `₹${safeAmount(bd.totalNetAmount)}`,
+          isCancelled: bd.billingDocumentIsCancelled
         },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: 0 }
       })
+
       if (bd.soldToParty) {
         addEdge(`bp_${bd.soldToParty}`, `bd_${bd.billingDocument}`, 'billed to')
       }
     }
 
-    // Link billing doc items → deliveries (via referenceSdDocument = delivery)
-    const bdItems = await prisma.billingDocumentItem.findMany({ take: 300 })
+    // Delivery → Billing (FIXED)
     for (const bi of bdItems) {
-      if (bi.referenceSdDocument) {
-        // referenceSdDocument could be a delivery doc
-        if (edgeSet.has(`del_${bi.referenceSdDocument}`) || deliveries.find(d => d.deliveryDocument === bi.referenceSdDocument)) {
-          addEdge(`del_${bi.referenceSdDocument}`, `bd_${bi.billingDocument}`, 'billed')
-        }
+      if (bi.referenceSdDocument && deliveryMap.has(bi.referenceSdDocument)) {
+        addEdge(`del_${bi.referenceSdDocument}`, `bd_${bi.billingDocument}`, 'billed')
       }
     }
 
-    // Payment nodes + edges from billing docs
+    // ── Payments ──
     for (const pmt of payments) {
-      const pmtId = `pmt_${pmt.id}`
+      const id = `pmt_${pmt.id}`
+
       nodes.push({
-        id: pmtId,
+        id,
         type: 'payment',
         data: {
-          label: `Payment`,
-          subLabel: `₹${Number(pmt.amountInTransactionCurrency || 0).toLocaleString()}`,
-          accountingDocument: pmt.accountingDocument,
-          clearingDate: pmt.clearingDate,
-          glAccount: pmt.glAccount,
+          label: 'Payment',
+          subLabel: `₹${safeAmount(pmt.amountInTransactionCurrency)}`
         },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: 0 }
       })
+
       if (pmt.customer) {
-        addEdge(`bp_${pmt.customer}`, pmtId, 'pays')
+        addEdge(`bp_${pmt.customer}`, id, 'pays')
       }
-      // Link payment → billing doc via accountingDocument
-      const matchingBD = billingDocs.find(bd => bd.accountingDocument === pmt.accountingDocument)
-      if (matchingBD) {
-        addEdge(`bd_${matchingBD.billingDocument}`, pmtId, 'clears')
+
+      const bd = billingMap.get(pmt.accountingDocument)
+      if (bd) {
+        addEdge(`bd_${bd.billingDocument}`, id, 'clears')
       }
     }
 
-    // Journal Entry nodes + edges from billing docs
+    // ── Journal Entries ──
     for (const je of journalEntries) {
-      const jeId = `je_${je.id}`
+      const id = `je_${je.id}`
+
       nodes.push({
-        id: jeId,
+        id,
         type: 'journalEntry',
         data: {
-          label: `Journal Entry`,
-          subLabel: `₹${Number(je.amountInTransactionCurrency || 0).toLocaleString()}`,
-          accountingDocument: je.accountingDocument,
-          glAccount: je.glAccount,
-          postingDate: je.postingDate,
-          docType: je.accountingDocumentType,
+          label: 'Journal Entry',
+          subLabel: `₹${safeAmount(je.amountInTransactionCurrency)}`
         },
-        position: { x: 0, y: 0 },
+        position: { x: 0, y: 0 }
       })
+
       if (je.referenceDocument) {
-        addEdge(`bd_${je.referenceDocument}`, jeId, 'posts to')
+        addEdge(`bd_${je.referenceDocument}`, id, 'posted')
       }
     }
 
     res.json({ nodes, edges })
+
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to load graph' })
   }
 })
 
-// GET /api/graph/node/:type/:id - node detail
+// ── NODE DETAILS ──
 router.get('/node/:type/:id', async (req: Request, res: Response) => {
   const { type, id } = req.params
+  const cleanId = id.split('_')[1]
+
   try {
     let data: any = null
-    switch (type) {
-      case 'salesOrder':
-        data = await prisma.salesOrderHeader.findUnique({
-          where: { salesOrder: id },
-          include: { items: true, soldTo: { include: { addresses: true } } }
-        })
-        break
-      case 'delivery':
-        data = await prisma.outboundDeliveryHeader.findUnique({
-          where: { deliveryDocument: id },
-          include: { items: true }
-        })
-        break
-      case 'billingDocument':
-        data = await prisma.billingDocumentHeader.findUnique({
-          where: { billingDocument: id },
-          include: { items: true, soldTo: true, journalEntries: true }
-        })
-        break
-      case 'businessPartner':
-        data = await prisma.businessPartner.findUnique({
-          where: { businessPartner: id },
-          include: { addresses: true }
-        })
-        break
-      case 'payment':
-        data = await prisma.paymentAccountsReceivable.findUnique({ where: { id: parseInt(id) } })
-        break
-      case 'journalEntry':
-        data = await prisma.journalEntryItem.findUnique({ where: { id: parseInt(id) } })
-        break
+
+    if (type === 'salesOrder') {
+      data = await prisma.salesOrderHeader.findUnique({
+        where: { salesOrder: cleanId },
+        include: { items: true, soldTo: true }
+      })
     }
+
+    if (type === 'delivery') {
+      data = await prisma.outboundDeliveryHeader.findUnique({
+        where: { deliveryDocument: cleanId },
+        include: { items: true }
+      })
+    }
+
+    if (type === 'billingDocument') {
+      data = await prisma.billingDocumentHeader.findUnique({
+        where: { billingDocument: cleanId },
+        include: { items: true }
+      })
+    }
+
+    if (type === 'businessPartner') {
+      data = await prisma.businessPartner.findUnique({
+        where: { businessPartner: cleanId },
+        include: { addresses: true }
+      })
+    }
+
+    if (type === 'payment') {
+      data = await prisma.paymentAccountsReceivable.findUnique({
+        where: { id: Number(cleanId) }
+      })
+    }
+
+    if (type === 'journalEntry') {
+      data = await prisma.journalEntryItem.findUnique({
+        where: { id: Number(cleanId) }
+      })
+    }
+
     if (!data) return res.status(404).json({ error: 'Not found' })
+
     res.json(data)
+
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to load node' })
   }
 })
 
-// GET /api/graph/stats - summary stats for dashboard
+// ── STATS ──
 router.get('/stats', async (_req: Request, res: Response) => {
   try {
-    const [soCount, delCount, bdCount, pmtCount, bpCount, cancelledCount] = await Promise.all([
+    const [so, del, bd, pay, bp, cancelled] = await Promise.all([
       prisma.salesOrderHeader.count(),
       prisma.outboundDeliveryHeader.count(),
       prisma.billingDocumentHeader.count({ where: { billingDocumentIsCancelled: false } }),
@@ -237,20 +248,23 @@ router.get('/stats', async (_req: Request, res: Response) => {
       prisma.businessPartner.count(),
       prisma.billingDocumentHeader.count({ where: { billingDocumentIsCancelled: true } }),
     ])
-    const totalRevenue = await prisma.billingDocumentHeader.aggregate({
+
+    const revenue = await prisma.billingDocumentHeader.aggregate({
       _sum: { totalNetAmount: true },
       where: { billingDocumentIsCancelled: false }
     })
+
     res.json({
-      salesOrders: soCount,
-      deliveries: delCount,
-      billingDocuments: bdCount,
-      payments: pmtCount,
-      customers: bpCount,
-      cancelledInvoices: cancelledCount,
-      totalRevenue: totalRevenue._sum.totalNetAmount,
+      salesOrders: so,
+      deliveries: del,
+      billingDocuments: bd,
+      payments: pay,
+      customers: bp,
+      cancelledInvoices: cancelled,
+      totalRevenue: revenue._sum.totalNetAmount
     })
-  } catch (err) {
+
+  } catch {
     res.status(500).json({ error: 'Stats failed' })
   }
 })
