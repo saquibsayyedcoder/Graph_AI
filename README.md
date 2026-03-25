@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # ContextGraph-AI
 AI-powered context graph system that transforms relational business data into an interactive graph with natural language querying using LLMs.
 
@@ -226,4 +226,3 @@ Off-topic queries are rejected:
 | Database | PostgreSQL |
 | LLM | Groq (llama-3.3-70b-versatile + llama-3.1-8b-instant) |
 | Deployment | Railway (backend + DB), Vercel (frontend) |
->>>>>>> 0f6150c (backend and frontend connectivity is done)
