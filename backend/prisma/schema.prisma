@@ -1,0 +1,280 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+
+model BusinessPartner {
+  businessPartner         String   @id
+  customer                String?
+  businessPartnerCategory String?
+  businessPartnerFullName String?
+  businessPartnerName     String?
+  businessPartnerIsBlocked Boolean @default(false)
+  isMarkedForArchiving    Boolean  @default(false)
+  creationDate            DateTime?
+  lastChangeDate          DateTime?
+
+  salesOrderHeaders       SalesOrderHeader[]
+  billingDocumentHeaders  BillingDocumentHeader[]
+  payments                PaymentAccountsReceivable[]
+  journalEntries          JournalEntryItem[]
+  addresses               BusinessPartnerAddress[]
+
+  @@map("business_partners")
+}
+
+model BusinessPartnerAddress {
+  id              Int     @id @default(autoincrement())
+  businessPartner String
+  cityName        String?
+  country         String?
+  postalCode      String?
+  streetName      String?
+  region          String?
+
+  partner         BusinessPartner @relation(fields: [businessPartner], references: [businessPartner])
+
+  @@map("business_partner_addresses")
+}
+
+model SalesOrderHeader {
+  salesOrder                  String   @id
+  salesOrderType              String?
+  salesOrganization           String?
+  soldToParty                 String?
+  creationDate                DateTime?
+  totalNetAmount              Decimal? @db.Decimal(18,2)
+  overallDeliveryStatus       String?
+  overallOrdReltdBillgStatus  String?
+  transactionCurrency         String?
+  requestedDeliveryDate       DateTime?
+  headerBillingBlockReason    String?
+  deliveryBlockReason         String?
+  customerPaymentTerms        String?
+
+  soldTo                      BusinessPartner? @relation(fields: [soldToParty], references: [businessPartner])
+  items                       SalesOrderItem[]
+
+  @@map("sales_order_headers")
+}
+
+model SalesOrderItem {
+  id                      Int     @id @default(autoincrement())
+  salesOrder              String
+  salesOrderItem          String
+  material                String?
+  requestedQuantity       Decimal? @db.Decimal(18,3)
+  requestedQuantityUnit   String?
+  netAmount               Decimal? @db.Decimal(18,2)
+  transactionCurrency     String?
+  materialGroup           String?
+  productionPlant         String?
+  storageLocation         String?
+  salesDocumentRjcnReason String?
+  itemBillingBlockReason  String?
+
+  header                  SalesOrderHeader @relation(fields: [salesOrder], references: [salesOrder])
+
+  @@unique([salesOrder, salesOrderItem])
+  @@map("sales_order_items")
+}
+
+model SalesOrderScheduleLine {
+  id                    Int     @id @default(autoincrement())
+  salesOrder            String
+  salesOrderItem        String
+  scheduleLine          String?
+  requestedDeliveryDate DateTime?
+  scheduledQuantity     Decimal? @db.Decimal(18,3)
+  confirmedDeliveryDate DateTime?
+  confirmedQuantity     Decimal? @db.Decimal(18,3)
+
+  @@map("sales_order_schedule_lines")
+}
+
+model OutboundDeliveryHeader {
+  deliveryDocument              String   @id
+  creationDate                  DateTime?
+  shippingPoint                 String?
+  deliveryBlockReason           String?
+  headerBillingBlockReason      String?
+  overallGoodsMovementStatus    String?
+  overallPickingStatus          String?
+  actualGoodsMovementDate       DateTime?
+  hdrGeneralIncompletionStatus  String?
+
+  items                         OutboundDeliveryItem[]
+
+  @@map("outbound_delivery_headers")
+}
+
+model OutboundDeliveryItem {
+  id                      Int     @id @default(autoincrement())
+  deliveryDocument        String
+  deliveryDocumentItem    String
+  referenceSdDocument     String?
+  referenceSdDocumentItem String?
+  actualDeliveryQuantity  Decimal? @db.Decimal(18,3)
+  deliveryQuantityUnit    String?
+  plant                   String?
+  storageLocation         String?
+  itemBillingBlockReason  String?
+
+  header                  OutboundDeliveryHeader @relation(fields: [deliveryDocument], references: [deliveryDocument])
+
+  @@unique([deliveryDocument, deliveryDocumentItem])
+  @@map("outbound_delivery_items")
+}
+
+model BillingDocumentHeader {
+  billingDocument           String   @id
+  billingDocumentType       String?
+  creationDate              DateTime?
+  billingDocumentDate       DateTime?
+  billingDocumentIsCancelled Boolean @default(false)
+  cancelledBillingDocument  String?
+  totalNetAmount            Decimal? @db.Decimal(18,2)
+  transactionCurrency       String?
+  companyCode               String?
+  fiscalYear                String?
+  accountingDocument        String?
+  soldToParty               String?
+
+  soldTo                    BusinessPartner? @relation(fields: [soldToParty], references: [businessPartner])
+  items                     BillingDocumentItem[]
+  journalEntries            JournalEntryItem[]
+
+  @@map("billing_document_headers")
+}
+
+model BillingDocumentItem {
+  id                      Int     @id @default(autoincrement())
+  billingDocument         String
+  billingDocumentItem     String
+  material                String?
+  billingQuantity         Decimal? @db.Decimal(18,3)
+  billingQuantityUnit     String?
+  netAmount               Decimal? @db.Decimal(18,2)
+  transactionCurrency     String?
+  referenceSdDocument     String?
+  referenceSdDocumentItem String?
+
+  header                  BillingDocumentHeader @relation(fields: [billingDocument], references: [billingDocument])
+
+  @@unique([billingDocument, billingDocumentItem])
+  @@map("billing_document_items")
+}
+
+model PaymentAccountsReceivable {
+  id                            Int     @id @default(autoincrement())
+  companyCode                   String?
+  fiscalYear                    String?
+  accountingDocument            String?
+  accountingDocumentItem        String?
+  clearingDate                  DateTime?
+  clearingAccountingDocument    String?
+  amountInTransactionCurrency   Decimal? @db.Decimal(18,2)
+  transactionCurrency           String?
+  customer                      String?
+  invoiceReference              String?
+  salesDocument                 String?
+  postingDate                   DateTime?
+  glAccount                     String?
+  profitCenter                  String?
+
+  customerPartner               BusinessPartner? @relation(fields: [customer], references: [businessPartner])
+
+  @@map("payments_accounts_receivable")
+}
+
+model JournalEntryItem {
+  id                          Int     @id @default(autoincrement())
+  companyCode                 String?
+  fiscalYear                  String?
+  accountingDocument          String?
+  accountingDocumentItem      String?
+  glAccount                   String?
+  referenceDocument           String?
+  profitCenter                String?
+  amountInTransactionCurrency Decimal? @db.Decimal(18,2)
+  transactionCurrency         String?
+  postingDate                 DateTime?
+  accountingDocumentType      String?
+  customer                    String?
+  clearingDate                DateTime?
+  clearingAccountingDocument  String?
+
+  customerPartner             BusinessPartner? @relation(fields: [customer], references: [businessPartner])
+  billingDoc                  BillingDocumentHeader? @relation(fields: [referenceDocument], references: [billingDocument])
+
+  @@map("journal_entry_items")
+}
+
+model Product {
+  product             String   @id
+  productType         String?
+  productOldId        String?
+  grossWeight         Decimal? @db.Decimal(10,4)
+  netWeight           Decimal? @db.Decimal(10,4)
+  weightUnit          String?
+  productGroup        String?
+  baseUnit            String?
+  division            String?
+  isMarkedForDeletion Boolean  @default(false)
+  creationDate        DateTime?
+
+  descriptions        ProductDescription[]
+
+  @@map("products")
+}
+
+model ProductDescription {
+  id          Int     @id @default(autoincrement())
+  product     String
+  language    String?
+  description String?
+
+  prod        Product @relation(fields: [product], references: [product])
+
+  @@map("product_descriptions")
+}
+
+model Plant {
+  plant               String   @id
+  plantName           String?
+  salesOrganization   String?
+  distributionChannel String?
+  addressId           String?
+  factoryCalendar     String?
+  isMarkedForArchiving Boolean @default(false)
+
+  @@map("plants")
+}
+
+model CustomerSalesAreaAssignment {
+  id                  Int     @id @default(autoincrement())
+  customer            String?
+  salesOrganization   String?
+  distributionChannel String?
+  division            String?
+  salesGroup          String?
+  salesOffice         String?
+
+  @@map("customer_sales_area_assignments")
+}
+
+model CustomerCompanyAssignment {
+  id              Int     @id @default(autoincrement())
+  customer        String?
+  companyCode     String?
+  paymentTerms    String?
+  accountGroup    String?
+
+  @@map("customer_company_assignments")
+}

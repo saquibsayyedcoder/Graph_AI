@@ -1,0 +1,38 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --bg2: #1a1d27;
+  --bg3: #242736;
+  --border: #2e3347;
+  --text: #e8eaf0;
+  --text2: #9ca3af;
+  --text3: #6b7280;
+  --blue: #3b82f6;
+  --blue-dim: #1e3a5f;
+  --green: #22c55e;
+  --green-dim: #14532d;
+  --amber: #f59e0b;
+  --amber-dim: #451a03;
+  --red: #ef4444;
+  --red-dim: #450a0a;
+  --purple: #a855f7;
+  --purple-dim: #3b0764;
+  --teal: #14b8a6;
+  --teal-dim: #042f2e;
+}
+
+html, body, #root { height: 100%; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* React Flow overrides */
+.react-flow__background { background: var(--bg); }
+.react-flow__minimap { background: var(--bg2) !important; border: 1px solid var(--border) !important; border-radius: 8px; }
+.react-flow__controls { background: var(--bg2) !important; border: 1px solid var(--border) !important; border-radius: 8px; }
+.react-flow__controls button { background: var(--bg2) !important; color: var(--text) !important; border-color: var(--border) !important; }
+.react-flow__edge-path { stroke: var(--border) !important; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--blue) !important; }
+.react-flow__edge-label { font-size: 10px; fill: var(--text3) !important; }

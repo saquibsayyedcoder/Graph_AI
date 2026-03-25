@@ -1,0 +1,11 @@
+{
+  "name": "o2c-graph",
+  "private": true,
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "db:setup": "cd backend && npm run db:push && npm run db:seed",
+    "build": "cd backend && npm run build && cd ../frontend && npm run build"
+  }
+}
