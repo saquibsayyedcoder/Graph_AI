@@ -7,22 +7,27 @@ import { chatRouter } from './routes/chat'
 const app = express()
 const PORT = process.env.PORT || 4000
 
-// Allow both local dev and production frontend
 const allowedOrigins = [
-  'http://localhost:3000',                   // local dev
-  process.env.FRONTEND_URL || ''             // production frontend
-].filter(Boolean) // remove empty strings just in case
+  'http://localhost:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean)
 
 app.use(cors({
   origin: (origin, callback) => {
-      console.log('Request Origin:', origin) // 🔍 debug
-    // Allow requests with no origin (like Postman)
+    console.log('Request Origin:', origin) // 🔍 debug
+
+    // allow Postman / mobile apps / no-origin requests
     if (!origin) return callback(null, true)
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true)
-    } else {
-      callback(new Error('Not allowed by CORS'))
+
+    // normalize (remove trailing slash)
+    const normalizedOrigin = origin.replace(/\/$/, '')
+
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true)
     }
+
+    console.error('Blocked by CORS:', origin)
+    callback(new Error('Not allowed by CORS'))
   }
 }))
 
