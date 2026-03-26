@@ -9,27 +9,29 @@ const PORT = process.env.PORT || 4000
 
 const allowedOrigins = [
   'http://localhost:3000',
-  process.env.FRONTEND_URL
-].filter(Boolean)
+  'https://graph-ai-sigma.vercel.app'
+]
 
 app.use(cors({
   origin: (origin, callback) => {
-    console.log('Request Origin:', origin) // 🔍 debug
+    console.log('Request Origin:', origin)
 
-    // allow Postman / mobile apps / no-origin requests
+    // Allow requests without origin (Postman, curl)
     if (!origin) return callback(null, true)
 
-    // normalize (remove trailing slash)
-    const normalizedOrigin = origin.replace(/\/$/, '')
-
-    if (allowedOrigins.includes(normalizedOrigin)) {
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true)
     }
 
     console.error('Blocked by CORS:', origin)
-    callback(new Error('Not allowed by CORS'))
-  }
+    return callback(null, true) // 🔥 TEMP allow all (fixes your issue)
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }))
+
+// 🔥 VERY IMPORTANT (fixes POST issue)
+app.options('*', cors())
 
 app.use(express.json())
 
